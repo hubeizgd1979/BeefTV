@@ -1,6 +1,7 @@
 package beefapi
 
 import (
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/url"
@@ -10,18 +11,16 @@ import (
 
 const (
 	ProductionOrigin = "https://beeftv.app"
-	LegacyOrigin     = "https://enterprise.beefapi.com"
 	PreviewLocalHost = "enterprise.localhost"
 	ClientID         = "beeftv-enterprise-v1"
 	ClientScope      = "inference"
-	CredentialRef    = "beefapi-enterprise"
-	ChannelID        = "beefapi"
+	CredentialRef    = "beeftv"
+	ChannelID        = "beeftv"
 	TestOriginEnv    = "BEEFTV_ENTERPRISE_TEST_ORIGIN"
 	WalletPath       = "/console/topup"
 )
 
-// CanonicalOrigin defaults to BeefTV and only accepts the legacy enterprise
-// origin or an explicit loopback test origin.
+// CanonicalOrigin defaults to BeefTV and only accepts an explicit loopback test origin.
 func CanonicalOrigin(explicit string) (string, error) {
 	candidate := strings.TrimRight(strings.TrimSpace(explicit), "/")
 	if candidate == "" {
@@ -29,9 +28,6 @@ func CanonicalOrigin(explicit string) (string, error) {
 	}
 	if candidate == "" || strings.EqualFold(candidate, ProductionOrigin) {
 		return ProductionOrigin, nil
-	}
-	if strings.EqualFold(candidate, LegacyOrigin) {
-		return LegacyOrigin, nil
 	}
 	origin, err := parseSafeTestOrigin(candidate)
 	if err != nil {
@@ -130,21 +126,17 @@ func ValidateWalletURL(origin, raw string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func IsManagedChannel(channelID, credentialRef, baseURL string) bool {
-	if strings.TrimSpace(credentialRef) == CredentialRef {
-		return true
-	}
-	if strings.TrimSpace(channelID) == ChannelID {
-		return true
-	}
-	return IsEnterpriseBaseURL(baseURL)
+func IsManagedChannel(channelID, credentialRef, _ string) bool {
+	return strings.TrimSpace(credentialRef) == CredentialRef || strings.TrimSpace(channelID) == ChannelID
 }
 
-func IsEnterpriseBaseURL(baseURL string) bool {
-	parsed, err := url.Parse(strings.TrimSpace(baseURL))
-	if err != nil {
-		return false
+func IsManagedTaskInput(inputJSON string) bool {
+	var input struct {
+		Config struct {
+			CredentialRef string `json:"credentialRef"`
+			ChannelID     string `json:"channelId"`
+		} `json:"config"`
 	}
-	host := strings.ToLower(parsed.Hostname())
-	return parsed.Scheme == "https" && parsed.User == nil && (parsed.Port() == "" || parsed.Port() == "443") && (host == "enterprise.beefapi.com" || host == "beeftv.app")
+	return json.Unmarshal([]byte(inputJSON), &input) == nil &&
+		IsManagedChannel(input.Config.ChannelID, input.Config.CredentialRef, "")
 }

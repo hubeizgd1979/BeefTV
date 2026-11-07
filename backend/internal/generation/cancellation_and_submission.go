@@ -328,11 +328,16 @@ func ResolveManagedBeefAPISecrets(input map[string]any, beef *beefapi.Service, r
 	channelID := strings.TrimSpace(stringAnyValue(config["channelId"]))
 	credentialRef := strings.TrimSpace(stringAnyValue(config["credentialRef"]))
 	baseURL := strings.TrimSpace(stringAnyValue(config["baseUrl"]))
-	if !beefapi.IsManagedChannel(channelID, credentialRef, baseURL) && !HasLegacyBeefAPIKey(channelID, baseURL, beef, readLocalConfig) {
+	explicitManaged := credentialRef == beefapi.CredentialRef || channelID == beefapi.ChannelID
+	if !explicitManaged && !beefapi.IsManagedChannel(channelID, credentialRef, baseURL) && !HasLegacyBeefAPIKey(channelID, baseURL, beef, readLocalConfig) {
 		return input, nil
 	}
+	incomingKey := strings.TrimSpace(stringAnyValue(config["apiKey"]))
 	apiKey, resolvedBase, accountID, tokenID, err := LookupBeefAPICredential(beef, readLocalConfig)
 	if err != nil {
+		if !explicitManaged && incomingKey != "" {
+			return input, nil
+		}
 		var structured *kernel.AppError
 		if errors.As(err, &structured) && structured.Reason == "local_credential_failed" {
 			copied := *structured
@@ -341,7 +346,7 @@ func ResolveManagedBeefAPISecrets(input map[string]any, beef *beefapi.Service, r
 		}
 		return nil, err
 	}
-	if apiKey == "" {
+	if apiKey == "" || (!explicitManaged && incomingKey != "" && incomingKey != apiKey) {
 		return input, nil
 	}
 	next := make(map[string]any, len(config)+4)
@@ -357,7 +362,7 @@ func ResolveManagedBeefAPISecrets(input map[string]any, beef *beefapi.Service, r
 		delete(next, "channelId")
 	}
 	next["apiKey"] = apiKey
-	if strings.TrimSpace(stringAnyValue(next["baseUrl"])) == "" || beefapi.IsEnterpriseBaseURL(baseURL) || channelID == beefapi.ChannelID || credentialRef == beefapi.CredentialRef {
+	if strings.TrimSpace(stringAnyValue(next["baseUrl"])) == "" || channelID == beefapi.ChannelID || credentialRef == beefapi.CredentialRef {
 		next["baseUrl"] = resolvedBase
 	}
 	next["credentialRef"] = beefapi.CredentialRef
@@ -406,7 +411,7 @@ func LookupBeefAPICredential(beef *beefapi.Service, readLocalConfig func() ([]by
 		if channel.ID == beefapi.ChannelID && strings.TrimSpace(channel.APIKey) != "" {
 			base := strings.TrimSpace(channel.BaseURL)
 			if base == "" {
-				base = beefapi.LegacyOrigin
+				base = beefapi.ProductionOrigin
 			}
 			return channel.APIKey, base, "", "", nil
 		}
@@ -415,7 +420,7 @@ func LookupBeefAPICredential(beef *beefapi.Service, readLocalConfig func() ([]by
 }
 
 func HasLegacyBeefAPIKey(channelID, baseURL string, beef *beefapi.Service, readLocalConfig func() ([]byte, error)) bool {
-	if channelID != beefapi.ChannelID && !beefapi.IsEnterpriseBaseURL(baseURL) {
+	if !beefapi.IsManagedChannel(channelID, "", baseURL) {
 		return false
 	}
 	apiKey, _, _, _, err := LookupBeefAPICredential(beef, readLocalConfig)
@@ -426,14 +431,19 @@ func ResolveChannelModelsRequest(input *ChannelModelsRequest, beef *beefapi.Serv
 	if input == nil {
 		return nil
 	}
-	if !beefapi.IsManagedChannel(input.ChannelID, input.CredentialRef, input.BaseURL) && input.ChannelID != beefapi.ChannelID {
+	explicitManaged := strings.TrimSpace(input.CredentialRef) == beefapi.CredentialRef || strings.TrimSpace(input.ChannelID) == beefapi.ChannelID
+	if !explicitManaged && !beefapi.IsManagedChannel(input.ChannelID, input.CredentialRef, input.BaseURL) {
 		return nil
 	}
+	incomingKey := strings.TrimSpace(input.APIKey)
 	apiKey, baseURL, _, _, err := LookupBeefAPICredential(beef, readLocalConfig)
 	if err != nil {
+		if !explicitManaged && incomingKey != "" {
+			return nil
+		}
 		return err
 	}
-	if apiKey == "" {
+	if apiKey == "" || (!explicitManaged && incomingKey != "" && incomingKey != apiKey) {
 		return nil
 	}
 	input.APIKey = apiKey
@@ -443,6 +453,9 @@ func ResolveChannelModelsRequest(input *ChannelModelsRequest, beef *beefapi.Serv
 }
 
 func ResolveCustomRelayKey(targetURL, incoming string, beef *beefapi.Service, readLocalConfig func() ([]byte, error)) (string, error) {
+	if strings.TrimSpace(incoming) != "" {
+		return incoming, nil
+	}
 	if beef != nil && beef.HasManagedCredential() && !SameCredentialOrigin(targetURL, beef.Origin()) {
 		return incoming, nil
 	}
